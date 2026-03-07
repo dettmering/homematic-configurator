@@ -1,0 +1,337 @@
+:root {
+  --bg: #0f172a;
+  --bg-card: #1e293b;
+  --bg-hover: #334155;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --success: #22c55e;
+  --border: #334155;
+  --temp-cold: #3b82f6;
+  --temp-warm: #f59e0b;
+  --temp-hot: #ef4444;
+  --radius: 8px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+header h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+#connection-status {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+main {
+  display: flex;
+  height: calc(100vh - 60px);
+}
+
+/* Sidebar */
+aside {
+  width: 280px;
+  min-width: 280px;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+aside h2 {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#devices {
+  list-style: none;
+}
+
+#devices li {
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-bottom: 0.25rem;
+  transition: background 0.15s;
+}
+
+#devices li:hover {
+  background: var(--bg-hover);
+}
+
+#devices li.active {
+  background: var(--primary);
+  color: white;
+}
+
+#devices li .dev-type {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 0.2rem;
+}
+
+#devices li.active .dev-type {
+  color: rgba(255,255,255,0.7);
+}
+
+/* Editor */
+#editor {
+  flex: 1;
+  padding: 1.5rem 2rem;
+  overflow-y: auto;
+}
+
+#editor.hidden { display: none; }
+
+#editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+#editor-header h2 {
+  font-size: 1.4rem;
+}
+
+#editor-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Buttons */
+.btn {
+  padding: 0.5rem 1.25rem;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--bg-hover); color: var(--text); }
+.btn-secondary:hover { background: var(--border); }
+.btn-danger { background: var(--danger); color: white; }
+.btn-danger:hover { background: var(--danger-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Schedule grid */
+#schedule-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.day-row {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 1rem;
+  border: 1px solid var(--border);
+}
+
+.day-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.day-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  min-width: 100px;
+}
+
+.day-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-small {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--bg-hover);
+  color: var(--text);
+  transition: background 0.15s;
+}
+
+.btn-small:hover { background: var(--border); }
+
+/* Timeline bar */
+.timeline-container {
+  position: relative;
+  height: 48px;
+  background: var(--bg);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.timeline-slot {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: white;
+  transition: opacity 0.15s;
+  border-right: 1px solid rgba(0,0,0,0.3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.timeline-slot:hover {
+  opacity: 0.85;
+}
+
+.timeline-slot .slot-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.timeline-slot .slot-time {
+  font-size: 0.65rem;
+  opacity: 0.8;
+}
+
+/* Time axis */
+.time-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  padding: 0 2px;
+}
+
+/* Copy row */
+.copy-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.copy-controls select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+/* Modal */
+#modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+#modal-overlay.hidden { display: none; }
+
+#modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  min-width: 320px;
+}
+
+#modal h3 {
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+}
+
+.modal-field {
+  margin-bottom: 1rem;
+}
+
+.modal-field label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.modal-field input {
+  width: 100%;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+
+/* Toast */
+#toast {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  font-weight: 500;
+  z-index: 200;
+  transition: opacity 0.3s;
+}
+
+#toast.hidden { display: none; }
+#toast.success { background: var(--success); color: white; }
+#toast.error { background: var(--danger); color: white; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  main { flex-direction: column; }
+  aside { width: 100%; min-width: auto; border-right: none; border-bottom: 1px solid var(--border); max-height: 200px; }
+  #editor { padding: 1rem; }
+}

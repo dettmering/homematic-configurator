@@ -1,0 +1,4 @@
+rpc_url: "http://192.168.0.111:2001/"
+temp_scale: 2.0
+max_slots: 13
+channel: 0
