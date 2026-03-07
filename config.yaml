@@ -2,3 +2,10 @@ rpc_url: "http://192.168.0.111:2001/"
 temp_scale: 2.0
 max_slots: 13
 channel: 0
+
+# Optional: Weather forecast for smarter schedule optimization
+# Get a free API key at https://openweathermap.org/api
+# weather:
+#   api_key: "YOUR_API_KEY"
+#   lat: 52.52
+#   lon: 13.41

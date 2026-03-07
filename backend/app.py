@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.recommend import generate_recommendations
+from backend.weather import fetch_forecast, get_weekday_outdoor_temps
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -769,21 +770,40 @@ def get_recommendations():
         except Exception:
             continue
 
-    # Get readings from DB
+    # Get readings from DB (including outdoor_temp for ML features)
     all_readings: dict[int, list[dict]] = {}
     with get_db() as conn:
         for pid in all_schedules:
             rows = conn.execute(
-                "SELECT timestamp, actual_temp, set_temp, valve_state FROM readings "
-                "WHERE peer_id = ? ORDER BY timestamp",
+                "SELECT timestamp, actual_temp, set_temp, valve_state, outdoor_temp "
+                "FROM readings WHERE peer_id = ? ORDER BY timestamp",
                 (pid,),
             ).fetchall()
             all_readings[pid] = [
-                {"timestamp": r[0], "actual_temp": r[1], "set_temp": r[2], "valve_state": r[3]}
+                {
+                    "timestamp": r[0], "actual_temp": r[1], "set_temp": r[2],
+                    "valve_state": r[3], "outdoor_temp": r[4],
+                }
                 for r in rows
             ]
 
-    return generate_recommendations(all_readings, all_schedules, device_names)
+    # Try weather forecast (optional)
+    outdoor_temps = None
+    forecast_data = None
+    weather_cfg = cfg.get("weather")
+    if weather_cfg and weather_cfg.get("api_key"):
+        forecast_raw = fetch_forecast(
+            weather_cfg["api_key"],
+            weather_cfg.get("lat", 0),
+            weather_cfg.get("lon", 0),
+        )
+        if forecast_raw:
+            outdoor_temps = get_weekday_outdoor_temps(forecast_raw)
+            forecast_data = forecast_raw
+
+    return generate_recommendations(
+        all_readings, all_schedules, device_names, outdoor_temps, forecast_data,
+    )
 
 
 @app.get("/dashboard")

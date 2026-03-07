@@ -241,11 +241,23 @@ async function loadRecommendations() {
     // Summary
     let html = '<div class="rec-summary">';
     html += `<div class="rec-summary-item"><strong>${data.num_analyzed}</strong> analysiert</div>`;
+    if (data.num_ml > 0) {
+      html += `<div class="rec-summary-item"><strong>${data.num_ml}</strong> mit ML-Modell</div>`;
+    }
     html += `<div class="rec-summary-item"><strong>${data.num_waiting}</strong> warten auf Daten</div>`;
     if (data.avg_savings_pct > 0) {
       html += `<div class="rec-summary-item">Durchschn. Einsparung: <strong>${data.avg_savings_pct}%</strong></div>`;
     }
+    if (data.has_forecast) {
+      html += '<div class="rec-summary-item">Wettervorhersage: <strong>aktiv</strong></div>';
+    }
     html += '</div>';
+
+    // Forecast display
+    if (data.forecast) {
+      html += renderForecast(data.forecast);
+    }
+
     statusEl.innerHTML = html;
 
     // Per-device recommendations
@@ -268,6 +280,9 @@ async function loadRecommendations() {
 
       if (dev.model) {
         inner += '<div class="rec-model-info">';
+        if (dev.model.ml_active) {
+          inner += '<span class="ml-badge">ML</span>';
+        }
         if (dev.model.heat_up_rate !== null) {
           inner += `<span>Aufheizrate: ${dev.model.heat_up_rate} °C/h</span>`;
         }
@@ -277,7 +292,7 @@ async function loadRecommendations() {
         if (dev.model.avg_overshoot > 0) {
           inner += `<span>Ueberschuss: +${dev.model.avg_overshoot} °C</span>`;
         }
-        inner += `<span>${dev.model.samples} Messwerte</span>`;
+        inner += `<span>${dev.model.samples} Messwerte (${dev.model.heating_samples} Heiz, ${dev.model.cooling_samples} Kuehl)</span>`;
         inner += '</div>';
       }
 
@@ -411,4 +426,30 @@ function renderDeviceRanking(ranking) {
 
   table.appendChild(tbody);
   container.appendChild(table);
+}
+
+
+// ── Forecast ────────────────────────────────────────────────────────────────
+
+const WEEKDAY_MAP = {
+  MONDAY: 'Mo', TUESDAY: 'Di', WEDNESDAY: 'Mi',
+  THURSDAY: 'Do', FRIDAY: 'Fr', SATURDAY: 'Sa', SUNDAY: 'So',
+};
+
+function renderForecast(forecast) {
+  const days = Object.values(forecast).slice(0, 5);
+  if (days.length === 0) return '';
+
+  let html = '<div class="forecast-strip">';
+  days.forEach(day => {
+    const wd = WEEKDAY_MAP[day.weekday] || day.date.slice(5);
+    const avgColor = day.avg < 0 ? '#3b82f6' : day.avg < 10 ? '#06b6d4' : '#22c55e';
+    html += `<div class="forecast-day">
+      <div class="forecast-date">${wd} ${day.date.slice(8)}.${day.date.slice(5,7)}.</div>
+      <div class="forecast-temp" style="color:${avgColor}">${day.avg.toFixed(0)}°C</div>
+      <div class="forecast-range">${day.min.toFixed(0)}° / ${day.max.toFixed(0)}°</div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
 }
