@@ -9,6 +9,7 @@ const DAYS_ORDER = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY
 let currentDevice = null;
 let schedule = {}; // { MONDAY: [{end:"06:00", temp:17}, ...], ... }
 let editingSlot = null; // { day, index }
+let dragState = null; // { day, index, containerRect, minMin, maxMin }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -219,6 +220,23 @@ function renderSchedule() {
         openSlotEditor(day, idx);
       });
 
+      // Drag handle on right edge (not on the last slot — its end is always 24:00)
+      if (idx < slots.length - 1) {
+        const handle = document.createElement('div');
+        handle.className = 'drag-handle';
+        handle.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          startDrag(e, day, idx, timelineContainer);
+        });
+        handle.addEventListener('touchstart', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          startDrag(e.touches[0], day, idx, timelineContainer);
+        }, { passive: false });
+        el.appendChild(handle);
+      }
+
       timelineContainer.appendChild(el);
       prevEnd = endMin;
     });
@@ -378,6 +396,51 @@ async function saveSchedule() {
     btn.disabled = false;
     btn.textContent = 'Speichern';
   }
+}
+
+// ── Drag & Drop ──────────────────────────────────────────────────────────────
+
+function startDrag(e, day, index, container) {
+  const rect = container.getBoundingClientRect();
+  const slots = schedule[day];
+  // Min: previous slot end + 5 min (or 5 min from midnight)
+  const minMin = index > 0 ? timeToMinutes(slots[index - 1].end) + 5 : 5;
+  // Max: next slot end - 5 min
+  const maxMin = timeToMinutes(slots[index + 1].end) - 5;
+
+  dragState = { day, index, containerRect: rect, minMin, maxMin };
+  document.body.classList.add('dragging-slot');
+
+  document.addEventListener('mousemove', onDragMove);
+  document.addEventListener('mouseup', onDragEnd);
+  document.addEventListener('touchmove', onDragTouchMove, { passive: false });
+  document.addEventListener('touchend', onDragEnd);
+}
+
+function onDragTouchMove(e) {
+  e.preventDefault();
+  onDragMove(e.touches[0]);
+}
+
+function onDragMove(e) {
+  if (!dragState) return;
+  const { day, index, containerRect, minMin, maxMin } = dragState;
+  const x = e.clientX - containerRect.left;
+  const pct = Math.max(0, Math.min(1, x / containerRect.width));
+  let minutes = Math.round((pct * 1440) / 5) * 5; // snap to 5 min
+  minutes = Math.max(minMin, Math.min(maxMin, minutes));
+
+  schedule[day][index].end = minutesToTime(minutes);
+  renderSchedule();
+}
+
+function onDragEnd() {
+  dragState = null;
+  document.body.classList.remove('dragging-slot');
+  document.removeEventListener('mousemove', onDragMove);
+  document.removeEventListener('mouseup', onDragEnd);
+  document.removeEventListener('touchmove', onDragTouchMove);
+  document.removeEventListener('touchend', onDragEnd);
 }
 
 // ── Toast ────────────────────────────────────────────────────────────────────

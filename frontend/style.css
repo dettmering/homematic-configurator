@@ -194,7 +194,7 @@ aside h2 {
   height: 48px;
   background: var(--bg);
   border-radius: 6px;
-  overflow: hidden;
+  overflow: visible;
   cursor: pointer;
 }
 
@@ -216,6 +216,40 @@ aside h2 {
 
 .timeline-slot:hover {
   opacity: 0.85;
+}
+
+.timeline-slot .drag-handle {
+  position: absolute;
+  right: -4px;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.timeline-slot .drag-handle::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  top: 25%;
+  height: 50%;
+  width: 2px;
+  background: rgba(255,255,255,0.5);
+  border-radius: 1px;
+}
+
+.timeline-slot .drag-handle:hover::after {
+  background: rgba(255,255,255,0.9);
+}
+
+body.dragging-slot {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+body.dragging-slot .timeline-slot {
+  transition: none;
 }
 
 .timeline-slot .slot-label {
