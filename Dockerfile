@@ -9,6 +9,9 @@ COPY backend/ backend/
 COPY frontend/ frontend/
 COPY config.yaml .
 
+RUN mkdir -p /app/data
+VOLUME /app/data
+
 EXPOSE 8080
 
 CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8080"]

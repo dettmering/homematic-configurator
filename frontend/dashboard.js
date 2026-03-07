@@ -28,6 +28,10 @@ async function loadDashboard() {
     renderDailyChart(data.daily_degree_hours);
     renderSimultaneityChart(data.hourly_simultaneity, data.num_devices);
     renderDeviceRanking(data.device_ranking);
+
+    // Load recommendations and logging status in parallel
+    loadRecommendations();
+    loadLoggingStatus();
   } catch (e) {
     loading.textContent = 'Fehler beim Laden: ' + e.message;
   }
@@ -218,6 +222,148 @@ function simColor(pct) {
   if (pct < 60) return '#f59e0b';
   return '#ef4444';
 }
+
+// ── Device ranking ──────────────────────────────────────────────────────────
+
+// ── Recommendations ─────────────────────────────────────────────────────────
+
+async function loadRecommendations() {
+  const statusEl = document.getElementById('rec-status');
+  const devicesEl = document.getElementById('rec-devices');
+
+  statusEl.innerHTML = '<span style="color:var(--text-muted)">Analysiere Heizverhalten...</span>';
+
+  try {
+    const res = await fetch('/api/recommendations');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+    // Summary
+    let html = '<div class="rec-summary">';
+    html += `<div class="rec-summary-item"><strong>${data.num_analyzed}</strong> analysiert</div>`;
+    html += `<div class="rec-summary-item"><strong>${data.num_waiting}</strong> warten auf Daten</div>`;
+    if (data.avg_savings_pct > 0) {
+      html += `<div class="rec-summary-item">Durchschn. Einsparung: <strong>${data.avg_savings_pct}%</strong></div>`;
+    }
+    html += '</div>';
+    statusEl.innerHTML = html;
+
+    // Per-device recommendations
+    devicesEl.innerHTML = '';
+    data.devices.forEach(dev => {
+      const card = document.createElement('div');
+      card.className = 'rec-device';
+
+      let badgeClass = dev.status;
+      let badgeText = dev.status === 'waiting' ? 'Warte auf Daten'
+                    : dev.status === 'optimal' ? 'Optimal'
+                    : 'Optimierbar';
+
+      let inner = `
+        <div class="rec-device-header">
+          <span class="rec-device-name">${dev.name} <span style="color:var(--text-muted);font-size:0.75rem">(ID: ${dev.peer_id})</span></span>
+          <span class="rec-badge ${badgeClass}">${badgeText}</span>
+        </div>
+        <div class="rec-message">${dev.message}</div>`;
+
+      if (dev.model) {
+        inner += '<div class="rec-model-info">';
+        if (dev.model.heat_up_rate !== null) {
+          inner += `<span>Aufheizrate: ${dev.model.heat_up_rate} °C/h</span>`;
+        }
+        if (dev.model.cool_down_rate !== null) {
+          inner += `<span>Abkuehlrate: ${dev.model.cool_down_rate} °C/h</span>`;
+        }
+        if (dev.model.avg_overshoot > 0) {
+          inner += `<span>Ueberschuss: +${dev.model.avg_overshoot} °C</span>`;
+        }
+        inner += `<span>${dev.model.samples} Messwerte</span>`;
+        inner += '</div>';
+      }
+
+      if (dev.changes && dev.changes.length > 0) {
+        inner += '<ul class="rec-changes">';
+        dev.changes.forEach(c => {
+          let iconLabel = c.type === 'temp_reduce' ? 'Temp'
+                        : c.type === 'later_start' ? 'Start'
+                        : 'Ende';
+          inner += `<li><span class="change-icon ${c.type}">${iconLabel}</span> ${c.detail}</li>`;
+        });
+        inner += '</ul>';
+      }
+
+      if (dev.savings && dev.savings.savings_pct > 0) {
+        inner += `<div class="rec-savings">
+          Einsparung: <strong>~${dev.savings.savings_pct}%</strong>
+          (${dev.savings.savings_degree_hours} Grad-Stunden/Woche)`;
+        if (dev.optimized_schedule) {
+          inner += `<button class="rec-apply-btn" onclick="applyRecommendation(${dev.peer_id})">Uebernehmen</button>`;
+          // Store for later use
+          window['_rec_schedule_' + dev.peer_id] = dev.optimized_schedule;
+        }
+        inner += '</div>';
+      }
+
+      card.innerHTML = inner;
+      devicesEl.appendChild(card);
+    });
+  } catch (e) {
+    statusEl.textContent = 'Empfehlungen konnten nicht geladen werden: ' + e.message;
+  }
+}
+
+
+async function applyRecommendation(peerId) {
+  const schedule = window['_rec_schedule_' + peerId];
+  if (!schedule) return;
+
+  if (!confirm('Optimierten Zeitplan fuer dieses Geraet uebernehmen?')) return;
+
+  try {
+    const res = await fetch(`/api/devices/${peerId}/schedule`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peer_id: peerId, days: schedule }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+    alert('Zeitplan uebernommen! Bei Batteriegeraeten ggf. erst nach Wakeup wirksam.');
+    loadRecommendations();
+  } catch (e) {
+    alert('Fehler: ' + e.message);
+  }
+}
+
+
+// ── Logging status ──────────────────────────────────────────────────────────
+
+async function loadLoggingStatus() {
+  const container = document.getElementById('logging-status');
+  try {
+    const res = await fetch('/api/readings/status');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+    let html = '<div class="logging-info">';
+    html += `<div><strong>${data.total_readings}</strong> Messwerte</div>`;
+    html += `<div><strong>${data.devices_tracked}</strong> Geraete</div>`;
+    html += `<div>Intervall: <strong>${data.interval_seconds}s</strong></div>`;
+    if (data.oldest) {
+      const oldest = new Date(data.oldest);
+      const newest = new Date(data.newest);
+      const hours = Math.round((newest - oldest) / 3600000);
+      html += `<div>Aufzeichnung seit: <strong>${hours}h</strong></div>`;
+    } else {
+      html += '<div>Noch keine Daten aufgezeichnet</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.textContent = 'Status nicht verfuegbar';
+  }
+}
+
 
 // ── Device ranking ──────────────────────────────────────────────────────────
 

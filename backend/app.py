@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
+import threading
+import time
 import xmlrpc.client
+from collections import defaultdict
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -10,13 +16,155 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from collections import defaultdict
+from backend.recommend import generate_recommendations
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DB_PATH = DATA_DIR / "readings.db"
+
+LOGGING_INTERVAL = 300  # seconds (5 minutes)
+
 
 def load_config() -> dict:
     with open(CONFIG_PATH, "r") as f:
         return yaml.safe_load(f)
+
+
+# ── SQLite ───────────────────────────────────────────────────────────────────
+
+def init_db():
+    DATA_DIR.mkdir(exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            peer_id INTEGER NOT NULL,
+            actual_temp REAL,
+            set_temp REAL,
+            valve_state REAL,
+            outdoor_temp REAL
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_readings_peer_time ON readings(peer_id, timestamp)"
+    )
+    conn.commit()
+    conn.close()
+
+
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Background logger ────────────────────────────────────────────────────────
+
+THERMOSTAT_VALUE_CHANNELS = [1, 2, 3, 4, 5, 6]
+
+# Cache: peer_id -> channel that has ACTUAL_TEMPERATURE
+_channel_cache: dict[int, int] = {}
+
+
+def _find_values_channel(srv, peer_id: int) -> tuple[int | None, dict]:
+    """Find which channel has ACTUAL_TEMPERATURE in VALUES."""
+    if peer_id in _channel_cache:
+        ch = _channel_cache[peer_id]
+        try:
+            values = srv.getParamset(peer_id, ch, "VALUES")
+            if "ACTUAL_TEMPERATURE" in values or "TEMPERATURE" in values:
+                return ch, values
+        except Exception:
+            pass
+
+    for ch in THERMOSTAT_VALUE_CHANNELS:
+        try:
+            values = srv.getParamset(peer_id, ch, "VALUES")
+            if "ACTUAL_TEMPERATURE" in values or "TEMPERATURE" in values:
+                _channel_cache[peer_id] = ch
+                return ch, values
+        except Exception:
+            continue
+    return None, {}
+
+
+def _log_once():
+    """Poll all thermostats once and store readings."""
+    cfg = load_config()
+    srv = rpc_connect(cfg["rpc_url"])
+    channel = cfg.get("channel", 0)
+
+    # Get thermostat peer IDs
+    devices = srv.listDevices()
+    thermostat_ids: list[int] = []
+    seen: set[int] = set()
+    for dev in devices:
+        dev_type = dev.get("TYPE", "")
+        peer_id = dev.get("ID") if "ID" in dev else None
+        parent = dev.get("PARENT", "")
+        if parent or peer_id is None or peer_id in seen:
+            continue
+        has_weekprog = any(t in dev_type for t in THERMOSTAT_TYPES)
+        if not has_weekprog:
+            try:
+                master = srv.getParamset(peer_id, channel, "MASTER")
+                has_weekprog = any(k.startswith("ENDTIME_") for k in master)
+            except Exception:
+                pass
+        if has_weekprog:
+            seen.add(peer_id)
+            thermostat_ids.append(peer_id)
+
+    outdoor_temp = find_outdoor_temperature(srv)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_db() as conn:
+        for pid in thermostat_ids:
+            ch, values = _find_values_channel(srv, pid)
+            if ch is None:
+                continue
+            actual = values.get("ACTUAL_TEMPERATURE") or values.get("TEMPERATURE")
+            set_temp = values.get("SET_TEMPERATURE") or values.get("SET_POINT_TEMPERATURE")
+            valve = values.get("VALVE_STATE")
+            if valve is None:
+                valve = values.get("LEVEL")
+
+            if actual is None and set_temp is None:
+                continue
+
+            conn.execute(
+                "INSERT INTO readings (timestamp, peer_id, actual_temp, set_temp, valve_state, outdoor_temp)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    now, pid,
+                    float(actual) if actual is not None else None,
+                    float(set_temp) if set_temp is not None else None,
+                    float(valve) if valve is not None else None,
+                    float(outdoor_temp) if outdoor_temp is not None else None,
+                ),
+            )
+
+
+def _logging_loop():
+    """Background thread: log readings every LOGGING_INTERVAL seconds."""
+    while True:
+        try:
+            _log_once()
+        except Exception:
+            pass
+        time.sleep(LOGGING_INTERVAL)
+
+
+init_db()
+
+_logger_thread = threading.Thread(target=_logging_loop, daemon=True)
+_logger_thread.start()
 
 app = FastAPI()
 
@@ -549,6 +697,93 @@ def get_dashboard():
 
     metrics = compute_dashboard_metrics(all_schedules, device_names, outdoor_temp)
     return metrics
+
+
+@app.get("/api/readings/status")
+def readings_status():
+    with get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0]
+        devices_count = conn.execute("SELECT COUNT(DISTINCT peer_id) FROM readings").fetchone()[0]
+        oldest = conn.execute("SELECT MIN(timestamp) FROM readings").fetchone()[0]
+        newest = conn.execute("SELECT MAX(timestamp) FROM readings").fetchone()[0]
+
+        per_device = conn.execute(
+            "SELECT peer_id, COUNT(*) as cnt, MIN(timestamp) as first, MAX(timestamp) as last "
+            "FROM readings GROUP BY peer_id ORDER BY peer_id"
+        ).fetchall()
+
+    return {
+        "total_readings": total,
+        "devices_tracked": devices_count,
+        "oldest": oldest,
+        "newest": newest,
+        "interval_seconds": LOGGING_INTERVAL,
+        "per_device": [
+            {"peer_id": r[0], "count": r[1], "first": r[2], "last": r[3]}
+            for r in per_device
+        ],
+    }
+
+
+@app.get("/api/recommendations")
+def get_recommendations():
+    cfg = load_config()
+    srv = rpc_connect(cfg["rpc_url"])
+    channel = cfg.get("channel", 0)
+    max_slots = cfg.get("max_slots", 13)
+    temp_scale = cfg.get("temp_scale", 2.0)
+
+    # Get all thermostat schedules
+    try:
+        devices = srv.listDevices()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"RPC error: {e}")
+
+    thermostat_peers: list[dict] = []
+    seen_ids: set[int] = set()
+    for dev in devices:
+        dev_type = dev.get("TYPE", "")
+        peer_id = dev.get("ID") if "ID" in dev else None
+        parent = dev.get("PARENT", "")
+        if parent or peer_id is None or peer_id in seen_ids:
+            continue
+        has_weekprog = any(t in dev_type for t in THERMOSTAT_TYPES)
+        if not has_weekprog:
+            try:
+                master = srv.getParamset(peer_id, channel, "MASTER")
+                has_weekprog = any(k.startswith("ENDTIME_") for k in master)
+            except Exception:
+                pass
+        if has_weekprog:
+            seen_ids.add(peer_id)
+            thermostat_peers.append({"id": peer_id, "name": dev.get("NAME", dev.get("ADDRESS", ""))})
+
+    all_schedules: dict[int, dict] = {}
+    device_names: dict[int, str] = {}
+    for peer in thermostat_peers:
+        pid = peer["id"]
+        device_names[pid] = peer["name"]
+        try:
+            master = srv.getParamset(pid, channel, "MASTER")
+            all_schedules[pid] = extract_schedule_from_paramset(master, max_slots, temp_scale)
+        except Exception:
+            continue
+
+    # Get readings from DB
+    all_readings: dict[int, list[dict]] = {}
+    with get_db() as conn:
+        for pid in all_schedules:
+            rows = conn.execute(
+                "SELECT timestamp, actual_temp, set_temp, valve_state FROM readings "
+                "WHERE peer_id = ? ORDER BY timestamp",
+                (pid,),
+            ).fetchall()
+            all_readings[pid] = [
+                {"timestamp": r[0], "actual_temp": r[1], "set_temp": r[2], "valve_state": r[3]}
+                for r in rows
+            ]
+
+    return generate_recommendations(all_readings, all_schedules, device_names)
 
 
 @app.get("/dashboard")
