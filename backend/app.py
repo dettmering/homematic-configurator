@@ -10,6 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from collections import defaultdict
+
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 def load_config() -> dict:
@@ -241,6 +243,317 @@ def put_schedule(peer_id: int, body: ScheduleUpdate):
         raise HTTPException(status_code=502, detail=f"RPC error: {e}")
 
     return {"status": "ok", "params_written": len(updates)}
+
+
+# ── outdoor sensor detection ─────────────────────────────────────────────────
+
+WEATHER_SENSOR_TYPES = {
+    "HM-WDS10-TH-O", "HM-WDS40-TH-I", "HM-WDS40-TH-I-2",
+    "HmIP-STHO", "HmIP-STHO-A", "HmIP-SWO-PR", "HmIP-SWO-PL",
+    "HmIP-SWO-B", "HM-WDS100-C6-O", "HM-WDS100-C6-O-2",
+    "HmIP-SPDR", "HM-Sen-Wa-Od",
+}
+
+
+def find_outdoor_temperature(srv: xmlrpc.client.ServerProxy) -> float | None:
+    """Try to find an outdoor temperature sensor and return its current reading."""
+    try:
+        devices = srv.listDevices()
+    except Exception:
+        return None
+
+    for dev in devices:
+        dev_type = dev.get("TYPE", "")
+        address = dev.get("ADDRESS", "")
+        parent = dev.get("PARENT", "")
+
+        # We want child channels, not parent devices
+        if not parent:
+            continue
+
+        # Check known weather sensor types
+        is_weather = any(t in dev_type for t in WEATHER_SENSOR_TYPES)
+        # Also check parent type
+        if not is_weather:
+            parent_type = ""
+            for d in devices:
+                if d.get("ADDRESS", "") == parent:
+                    parent_type = d.get("TYPE", "")
+                    break
+            is_weather = any(t in parent_type for t in WEATHER_SENSOR_TYPES)
+
+        if not is_weather:
+            continue
+
+        try:
+            values = srv.getParamset(address, "VALUES")
+            if "ACTUAL_TEMPERATURE" in values:
+                return float(values["ACTUAL_TEMPERATURE"])
+            if "TEMPERATURE" in values:
+                return float(values["TEMPERATURE"])
+        except Exception:
+            continue
+
+    return None
+
+
+# ── dashboard metrics ────────────────────────────────────────────────────────
+
+HEATING_THRESHOLD = 17.0  # temperatures above this count as "active heating"
+
+
+def compute_dashboard_metrics(
+    all_schedules: dict[int, dict],
+    device_names: dict[int, str],
+    outdoor_temp: float | None,
+) -> dict:
+    """Compute the 5 dashboard metrics from all thermostat schedules."""
+    num_devices = len(all_schedules)
+    if num_devices == 0:
+        return {"error": "Keine Thermostate gefunden"}
+
+    # Per-device daily stats
+    device_daily: dict[int, dict[str, dict]] = {}
+    for peer_id, sched in all_schedules.items():
+        device_daily[peer_id] = {}
+        for day, slots in sched.items():
+            total_minutes = 0
+            weighted_sum = 0.0
+            heating_minutes = 0
+            temps = []
+            prev_end = 0
+            for slot in slots:
+                h, m = slot["end"].split(":")
+                end_min = int(h) * 60 + int(m)
+                duration = end_min - prev_end
+                if duration <= 0:
+                    prev_end = end_min
+                    continue
+                total_minutes += duration
+                weighted_sum += slot["temp"] * duration
+                temps.append(slot["temp"])
+                if slot["temp"] > HEATING_THRESHOLD:
+                    heating_minutes += duration
+                prev_end = end_min
+
+            avg_temp = weighted_sum / total_minutes if total_minutes > 0 else 0
+            min_temp = min(temps) if temps else 0
+            max_temp = max(temps) if temps else 0
+            device_daily[peer_id][day] = {
+                "avg_temp": round(avg_temp, 1),
+                "heating_minutes": heating_minutes,
+                "min_temp": min_temp,
+                "max_temp": max_temp,
+                "spread": round(max_temp - min_temp, 1),
+            }
+
+    # 1. Weighted average temperature per day (across all devices)
+    daily_avg_temps = {}
+    for day in CANONICAL_DAYS:
+        temps = [device_daily[pid][day]["avg_temp"]
+                 for pid in device_daily if day in device_daily[pid]]
+        daily_avg_temps[day] = round(sum(temps) / len(temps), 1) if temps else 0
+
+    overall_avg = round(sum(daily_avg_temps.values()) / 7, 1)
+
+    # 2. Heating hours per day (average across devices)
+    daily_heating_hours = {}
+    for day in CANONICAL_DAYS:
+        mins = [device_daily[pid][day]["heating_minutes"]
+                for pid in device_daily if day in device_daily[pid]]
+        total = sum(mins)
+        daily_heating_hours[day] = round(total / 60, 1)  # total device-hours
+
+    total_heating_hours_week = round(sum(daily_heating_hours.values()), 1)
+
+    # 3. Temperature spread per device
+    device_spreads = {}
+    for pid in all_schedules:
+        spreads = [device_daily[pid][d]["spread"]
+                   for d in CANONICAL_DAYS if d in device_daily[pid]]
+        device_spreads[pid] = round(max(spreads), 1) if spreads else 0
+
+    avg_spread = round(sum(device_spreads.values()) / num_devices, 1) if num_devices else 0
+
+    # 4. Radiator-degree-hours (Heizkoerper-Grad-Stunden)
+    # Sum of (temp * hours) for each device for each day
+    daily_degree_hours = {}
+    for day in CANONICAL_DAYS:
+        dh = 0.0
+        for pid in all_schedules:
+            sched = all_schedules[pid]
+            if day not in sched:
+                continue
+            prev_end = 0
+            for slot in sched[day]:
+                h, m = slot["end"].split(":")
+                end_min = int(h) * 60 + int(m)
+                duration_h = (end_min - prev_end) / 60
+                effective_temp = slot["temp"]
+                if outdoor_temp is not None:
+                    effective_temp = max(0, slot["temp"] - outdoor_temp)
+                dh += effective_temp * duration_h
+                prev_end = end_min
+        daily_degree_hours[day] = round(dh, 1)
+
+    total_degree_hours_week = round(sum(daily_degree_hours.values()), 1)
+
+    # 5. Simultaneity factor - per hour of day, how many devices heat above threshold
+    # Returns a 24-element array (one per hour)
+    hourly_simultaneity = []
+    for hour in range(24):
+        mid = hour * 60 + 30  # middle of the hour
+        # Average across all 7 days
+        total_active = 0
+        for day in CANONICAL_DAYS:
+            active = 0
+            for pid in all_schedules:
+                sched = all_schedules[pid]
+                if day not in sched:
+                    continue
+                # Find which slot covers this minute
+                prev_end = 0
+                for slot in sched[day]:
+                    h, m = slot["end"].split(":")
+                    end_min = int(h) * 60 + int(m)
+                    if prev_end <= mid < end_min:
+                        if slot["temp"] > HEATING_THRESHOLD:
+                            active += 1
+                        break
+                    prev_end = end_min
+            total_active += active
+        hourly_simultaneity.append(round(total_active / 7, 1))
+
+    max_simultaneity = max(hourly_simultaneity) if hourly_simultaneity else 0
+
+    # Heatmap data: for each day & hour, average temp across all devices
+    heatmap = {}
+    for day in CANONICAL_DAYS:
+        hours = []
+        for hour in range(24):
+            mid = hour * 60 + 30
+            temps = []
+            for pid in all_schedules:
+                sched = all_schedules[pid]
+                if day not in sched:
+                    continue
+                prev_end = 0
+                for slot in sched[day]:
+                    h, m = slot["end"].split(":")
+                    end_min = int(h) * 60 + int(m)
+                    if prev_end <= mid < end_min:
+                        temps.append(slot["temp"])
+                        break
+                    prev_end = end_min
+            hours.append(round(sum(temps) / len(temps), 1) if temps else 0)
+        heatmap[day] = hours
+
+    # Per-device ranking
+    device_ranking = []
+    for pid in all_schedules:
+        dh = 0.0
+        for day in CANONICAL_DAYS:
+            if day not in all_schedules[pid]:
+                continue
+            prev_end = 0
+            for slot in all_schedules[pid][day]:
+                h, m = slot["end"].split(":")
+                end_min = int(h) * 60 + int(m)
+                duration_h = (end_min - prev_end) / 60
+                effective_temp = slot["temp"]
+                if outdoor_temp is not None:
+                    effective_temp = max(0, slot["temp"] - outdoor_temp)
+                dh += effective_temp * duration_h
+                prev_end = end_min
+        device_ranking.append({
+            "peer_id": pid,
+            "name": device_names.get(pid, str(pid)),
+            "degree_hours_week": round(dh, 1),
+            "avg_spread": device_spreads.get(pid, 0),
+        })
+    device_ranking.sort(key=lambda x: x["degree_hours_week"], reverse=True)
+
+    return {
+        "num_devices": num_devices,
+        "outdoor_temp": outdoor_temp,
+        "avg_temp": overall_avg,
+        "daily_avg_temps": daily_avg_temps,
+        "total_heating_hours_week": total_heating_hours_week,
+        "daily_heating_hours": daily_heating_hours,
+        "avg_spread": avg_spread,
+        "total_degree_hours_week": total_degree_hours_week,
+        "daily_degree_hours": daily_degree_hours,
+        "max_simultaneity": max_simultaneity,
+        "hourly_simultaneity": hourly_simultaneity,
+        "heatmap": heatmap,
+        "device_ranking": device_ranking,
+    }
+
+
+@app.get("/api/dashboard")
+def get_dashboard():
+    cfg = load_config()
+    srv = rpc_connect(cfg["rpc_url"])
+    channel = cfg.get("channel", 0)
+    max_slots = cfg.get("max_slots", 13)
+    temp_scale = cfg.get("temp_scale", 2.0)
+
+    # Get all thermostats
+    try:
+        devices = srv.listDevices()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"RPC error: {e}")
+
+    thermostat_peers: list[dict] = []
+    seen_ids: set[int] = set()
+    for dev in devices:
+        dev_type = dev.get("TYPE", "")
+        peer_id = dev.get("ID") if "ID" in dev else None
+        address = dev.get("ADDRESS", "")
+        parent = dev.get("PARENT", "")
+
+        if parent:
+            continue
+        if peer_id is None or peer_id in seen_ids:
+            continue
+
+        has_weekprog = any(t in dev_type for t in THERMOSTAT_TYPES)
+        if not has_weekprog:
+            try:
+                master = srv.getParamset(peer_id, channel, "MASTER")
+                has_weekprog = any(k.startswith("ENDTIME_") for k in master)
+            except Exception:
+                pass
+
+        if has_weekprog:
+            seen_ids.add(peer_id)
+            thermostat_peers.append({
+                "id": peer_id,
+                "name": dev.get("NAME", address),
+            })
+
+    # Fetch all schedules
+    all_schedules: dict[int, dict] = {}
+    device_names: dict[int, str] = {}
+    for peer in thermostat_peers:
+        pid = peer["id"]
+        device_names[pid] = peer["name"]
+        try:
+            master = srv.getParamset(pid, channel, "MASTER")
+            all_schedules[pid] = extract_schedule_from_paramset(master, max_slots, temp_scale)
+        except Exception:
+            continue
+
+    # Try outdoor temperature
+    outdoor_temp = find_outdoor_temperature(srv)
+
+    metrics = compute_dashboard_metrics(all_schedules, device_names, outdoor_temp)
+    return metrics
+
+
+@app.get("/dashboard")
+def dashboard_page():
+    return FileResponse(FRONTEND_DIR / "dashboard.html")
 
 
 # ── serve frontend ───────────────────────────────────────────────────────────

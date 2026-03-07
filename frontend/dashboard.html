@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gasverbrauch Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>Gasverbrauch Dashboard</h1>
+    <nav>
+      <a href="/" class="nav-link">Thermostat-Editor</a>
+      <span id="outdoor-temp"></span>
+    </nav>
+  </header>
+
+  <main id="dashboard-main">
+    <div id="dashboard-loading">Lade Daten...</div>
+
+    <div id="dashboard-content" class="hidden">
+      <!-- Metric cards -->
+      <div id="metric-cards">
+        <div class="metric-card">
+          <div class="metric-label">Durchschnittstemperatur</div>
+          <div class="metric-value" id="m-avg-temp">--</div>
+          <div class="metric-sub" id="m-avg-temp-sub"></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Heizstunden / Woche</div>
+          <div class="metric-value" id="m-heating-hours">--</div>
+          <div class="metric-sub" id="m-heating-hours-sub"></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Temperaturspreizung</div>
+          <div class="metric-value" id="m-spread">--</div>
+          <div class="metric-sub" id="m-spread-sub"></div>
+        </div>
+        <div class="metric-card highlight">
+          <div class="metric-label">Heizkoerper-Grad-Stunden / Woche</div>
+          <div class="metric-value" id="m-degree-hours">--</div>
+          <div class="metric-sub" id="m-degree-hours-sub"></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Max. Gleichzeitigkeit</div>
+          <div class="metric-value" id="m-simultaneity">--</div>
+          <div class="metric-sub" id="m-simultaneity-sub"></div>
+        </div>
+      </div>
+
+      <!-- Heatmap -->
+      <section class="dashboard-section">
+        <h2>Waerme-Heatmap (Woche)</h2>
+        <div id="heatmap-container">
+          <div id="heatmap"></div>
+          <div id="heatmap-legend"></div>
+        </div>
+      </section>
+
+      <!-- Charts row -->
+      <div class="charts-row">
+        <section class="dashboard-section chart-half">
+          <h2>Heizlast pro Tag</h2>
+          <div id="chart-daily"></div>
+        </section>
+        <section class="dashboard-section chart-half">
+          <h2>Gleichzeitigkeit (Tagesverlauf)</h2>
+          <div id="chart-simultaneity"></div>
+        </section>
+      </div>
+
+      <!-- Device ranking -->
+      <section class="dashboard-section">
+        <h2>Heizkoerper-Ranking</h2>
+        <div id="device-ranking"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
