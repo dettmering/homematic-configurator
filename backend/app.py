@@ -74,7 +74,7 @@ def extract_schedule_from_paramset(paramset: dict, max_slots: int, temp_scale: f
                 break
             endtime = int(paramset[ek])
             temp_raw = paramset[tk]
-            temp_c = float(temp_raw) / temp_scale
+            temp_c = float(temp_raw)
             h, m = divmod(endtime, 60)
             slots.append({
                 "end": f"{h:02d}:{m:02d}",
@@ -222,7 +222,7 @@ def put_schedule(peer_id: int, body: ScheduleUpdate):
             hh, mm = s.end.strip().split(":")
             em = int(hh) * 60 + int(mm)
             updates[f"ENDTIME_{token}_{i}"] = em
-            updates[f"TEMPERATURE_{token}_{i}"] = int(round(s.temp * temp_scale))
+            updates[f"TEMPERATURE_{token}_{i}"] = s.temp
 
         # clear remaining slots
         for i in range(len(slots) + 1, max_slots + 1):
@@ -231,7 +231,7 @@ def put_schedule(peer_id: int, body: ScheduleUpdate):
             if ek in master:
                 updates[ek] = 1440
             if tk in master:
-                updates[tk] = int(round(slots[-1].temp * temp_scale))
+                updates[tk] = slots[-1].temp
 
     try:
         srv.putParamset(peer_id, channel, "MASTER", updates)
