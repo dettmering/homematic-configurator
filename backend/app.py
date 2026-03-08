@@ -162,10 +162,22 @@ def _logging_loop():
         time.sleep(LOGGING_INTERVAL)
 
 
-init_db()
+def _features_enabled() -> dict:
+    """Return feature flags from config (default: enabled)."""
+    cfg = load_config()
+    features = cfg.get("features", {})
+    return {
+        "logging": features.get("logging", True),
+        "recommendations": features.get("recommendations", True),
+    }
 
-_logger_thread = threading.Thread(target=_logging_loop, daemon=True)
-_logger_thread.start()
+
+_features = _features_enabled()
+
+if _features["logging"]:
+    init_db()
+    _logger_thread = threading.Thread(target=_logging_loop, daemon=True)
+    _logger_thread.start()
 
 app = FastAPI()
 
@@ -265,7 +277,8 @@ class ScheduleUpdate(BaseModel):
 def get_config():
     cfg = load_config()
     return {"rpc_url": cfg["rpc_url"], "temp_scale": cfg.get("temp_scale", 2.0),
-            "max_slots": cfg.get("max_slots", 13), "channel": cfg.get("channel", 0)}
+            "max_slots": cfg.get("max_slots", 13), "channel": cfg.get("channel", 0),
+            "features": _features}
 
 
 @app.get("/api/devices")
@@ -702,6 +715,8 @@ def get_dashboard():
 
 @app.get("/api/readings/status")
 def readings_status():
+    if not _features["logging"]:
+        raise HTTPException(status_code=404, detail="Logging is disabled")
     with get_db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0]
         devices_count = conn.execute("SELECT COUNT(DISTINCT peer_id) FROM readings").fetchone()[0]
@@ -728,6 +743,8 @@ def readings_status():
 
 @app.get("/api/recommendations")
 def get_recommendations():
+    if not _features["recommendations"]:
+        raise HTTPException(status_code=404, detail="Recommendations are disabled")
     cfg = load_config()
     srv = rpc_connect(cfg["rpc_url"])
     channel = cfg.get("channel", 0)

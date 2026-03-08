@@ -15,6 +15,11 @@ async function loadDashboard() {
   const content = document.getElementById('dashboard-content');
 
   try {
+    // Load config for feature flags
+    const cfgRes = await fetch('/api/config');
+    const cfg = await cfgRes.json();
+    const features = cfg.features || {};
+
     const res = await fetch('/api/dashboard');
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
@@ -29,9 +34,19 @@ async function loadDashboard() {
     renderSimultaneityChart(data.hourly_simultaneity, data.num_devices);
     renderDeviceRanking(data.device_ranking);
 
-    // Load recommendations and logging status in parallel
-    loadRecommendations();
-    loadLoggingStatus();
+    // Load optional features based on config
+    if (features.recommendations !== false) {
+      loadRecommendations();
+    } else {
+      const recSection = document.getElementById('recommendations-section');
+      if (recSection) recSection.style.display = 'none';
+    }
+    if (features.logging !== false) {
+      loadLoggingStatus();
+    } else {
+      const logSection = document.getElementById('logging-status');
+      if (logSection) logSection.closest('.dashboard-section').style.display = 'none';
+    }
   } catch (e) {
     loading.textContent = 'Fehler beim Laden: ' + e.message;
   }

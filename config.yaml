@@ -3,6 +3,11 @@ temp_scale: 2.0
 max_slots: 13
 channel: 0
 
+# Feature toggles: enable/disable data collection and ML optimization
+features:
+  logging: true          # Background data collection (thermostat readings every 5 min)
+  recommendations: true  # ML-based schedule optimization suggestions
+
 # Optional: Weather forecast for smarter schedule optimization
 # Get a free API key at https://openweathermap.org/api
 # weather:
