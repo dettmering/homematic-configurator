@@ -168,21 +168,14 @@ def optimize_schedule(
         if outdoor_temps and day in outdoor_temps:
             out_t = outdoor_temps[day]
 
-        # --- Overshoot correction ---
-        if overshoot > 0.5:
-            reduction = min(overshoot * 0.5, 1.5)
-            reduction = round(reduction * 2) / 2
-            if reduction >= 0.5:
-                for slot in new_slots:
-                    if slot["temp"] > 18:
-                        old_t = slot["temp"]
-                        slot["temp"] = old_t - reduction
-                        changes.append({
-                            "day": day,
-                            "type": "temp_reduce",
-                            "detail": f"Slot bis {slot['end']}: {old_t}°C -> {slot['temp']}°C "
-                                      f"(Ist-Temp ~{overshoot:.1f}°C ueber Soll)",
-                        })
+        # --- Overshoot hint (informational only, does NOT change schedule) ---
+        if overshoot > 1.0 and day == list(schedule.keys())[0]:
+            changes.append({
+                "day": day,
+                "type": "info",
+                "detail": f"Ist-Temperatur liegt ~{overshoot:.1f}°C ueber Soll. "
+                          f"Falls der Raum zu warm ist, Sollwert manuell senken.",
+            })
 
         # --- Pre-heat optimization (ML-based) ---
         for i in range(1, len(new_slots)):

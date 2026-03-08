@@ -299,7 +299,7 @@ async function loadRecommendations() {
       if (dev.changes && dev.changes.length > 0) {
         inner += '<ul class="rec-changes">';
         dev.changes.forEach(c => {
-          let iconLabel = c.type === 'temp_reduce' ? 'Temp'
+          let iconLabel = c.type === 'info' ? 'Info'
                         : c.type === 'later_start' ? 'Start'
                         : 'Ende';
           inner += `<li><span class="change-icon ${c.type}">${iconLabel}</span> ${c.detail}</li>`;
